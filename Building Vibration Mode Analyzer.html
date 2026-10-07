@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Building Vibration Mode Analyzer</title>
+<style>
+:root{--bg:#f3f5f9;--card:#fff;--text:#1d2433;--muted:#5b6578;--accent:#2457d6;--line:#d5dbe6;--ok:#1a7f4b;--err:#c0262d;--soft:#eaf0ff;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#12161f;--card:#1b2130;--text:#e8ecf5;--muted:#9aa5bd;--accent:#7aa2ff;--line:#2c3550;--ok:#4cd08a;--err:#ff7a80;--soft:#232c45}}
+:root[data-theme="dark"]{--bg:#12161f;--card:#1b2130;--text:#e8ecf5;--muted:#9aa5bd;--accent:#7aa2ff;--line:#2c3550;--ok:#4cd08a;--err:#ff7a80;--soft:#232c45}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",Arial,sans-serif;line-height:1.5}
+main{max-width:760px;margin:0 auto;padding:16px}
+h1{font-size:1.7rem;margin:8px 0}
+h2{font-size:1.15rem;margin:0 0 10px;color:var(--accent)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin:14px 0}
+.note{color:var(--muted);font-size:.92rem}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+label{display:block;font-weight:600;font-size:.95rem}
+input{width:100%;font-size:1.2rem;padding:8px;margin-top:4px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text)}
+button{font-size:1rem;padding:10px 14px;margin:8px 8px 0 0;border:1px solid var(--accent);border-radius:8px;background:var(--accent);color:#fff;cursor:pointer}
+button.alt{background:transparent;color:var(--accent)}
+button.sel{background:var(--accent);color:#fff}
+button.off{background:transparent;color:var(--accent)}
+#err{color:var(--err);font-weight:600;margin-top:8px}
+.mat{display:inline-block;margin:6px 14px 6px 0;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:1.2rem}
+.mat table{border-left:2px solid var(--text);border-right:2px solid var(--text);border-radius:6px;padding:0 6px}
+.mat td{padding:2px 10px;text-align:right}
+.big{font-size:1.3rem;font-weight:700}
+.scroll{overflow-x:auto}
+table.res{border-collapse:collapse;width:100%;min-width:480px}
+table.res th,table.res td{border:1px solid var(--line);padding:8px;text-align:left}
+table.res th{background:var(--soft)}
+.viz{display:flex;flex-wrap:wrap;gap:12px;justify-content:center}
+svg{background:var(--soft);border-radius:10px;max-width:100%;height:auto}
+.ok{color:var(--ok);font-weight:700}
+.bad{color:var(--err);font-weight:700}
+footer{text-align:center;color:var(--muted);font-size:.9rem;margin:20px 0 30px}
+</style>
+</head>
+<body>
+<main>
+<h1>Building Vibration Mode Analyzer</h1>
+<p>This tool uses a simple mathematical model to show how eigenvalues and eigenvectors represent the natural vibration modes of a building.</p>
+<p class="note">Model: a 2-storey building. Each floor is a mass, connected by springs (stiffness). All values are user-defined / illustrative, not real building data.</p>
+
+<section class="card">
+<h2>1. Inputs</h2>
+<div class="grid">
+<label>Mass of floor 1 (m1)<input id="m1" type="number" step="any" value="1"></label>
+<label>Mass of floor 2 (m2)<input id="m2" type="number" step="any" value="1"></label>
+<label>Stiffness k1 (ground to floor 1)<input id="k1" type="number" step="any" value="2"></label>
+<label>Stiffness k2 (floor 1 to floor 2)<input id="k2" type="number" step="any" value="2"></label>
+</div>
+<p class="note">Mass = how heavy a floor is. Stiffness = how strongly the spring resists bending. Use positive numbers only.</p>
+<button id="calc">Calculate</button>
+<button id="test" class="alt">Run Known Test Case</button>
+<div id="err"></div>
+</section>
+
+<section class="card">
+<h2>2. Mathematical Calculation</h2>
+<p class="note">We solve K&phi; = &lambda;M&phi;. Multiplying both sides by the inverse of M gives A&phi; = &lambda;&phi;, where A = M<sup>-1</sup>K.</p>
+<div class="mat">M = <table id="Mm"></table></div>
+<div class="mat">K = <table id="Km"></table></div>
+<div class="mat">A = <table id="Am"></table></div>
+<p class="note">M (mass matrix): floor masses on the diagonal. K (stiffness matrix): built from k1 and k2 as [[k1+k2, -k2], [-k2, k2]]. A: the matrix whose eigenvalues we need.</p>
+</section>
+
+<section class="card">
+<h2>3. Results</h2>
+<div class="scroll"><table class="res" id="resTable"></table></div>
+<ul class="note">
+<li><b>Eigenvalue (&lambda;)</b>: equals the square of the natural angular frequency (&lambda; = &omega;&sup2;).</li>
+<li><b>Eigenvector</b>: the shape of a vibration mode. Each number is how far a floor moves sideways (floor 1, floor 2). Shown scaled so the largest value is 1.</li>
+<li>&omega; = &radic;&lambda; (rad/s), and f = &omega; / (2&pi;) (Hz).</li>
+</ul>
+</section>
+
+<section class="card">
+<h2>4. Vibration Mode Visualization</h2>
+<div>
+<button id="mode1" class="sel">Mode 1</button>
+<button id="mode2" class="off">Mode 2</button>
+<button id="play" class="alt">Play Animation</button>
+</div>
+<p class="note" id="modeInfo"></p>
+<div class="viz">
+<svg id="bld" viewBox="0 0 300 260" width="300" height="260" role="img" aria-label="Building side view"></svg>
+<svg id="plot" viewBox="0 0 300 260" width="300" height="260" role="img" aria-label="Floor number versus normalized displacement"></svg>
+</div>
+<p class="note">Left: side view (movement is exaggerated). Right: floor number vs normalized mode displacement. In Mode 2 the floors move in opposite directions.</p>
+</section>
+
+<section class="card">
+<h2>5. Known Test Case</h2>
+<p>Masses = [1, 1], Stiffnesses = [2, 2]. Press "Run Known Test Case" above to compare.</p>
+<div class="scroll"><table class="res">
+<tr><th>Quantity</th><th>Expected</th></tr>
+<tr><td>K</td><td>[[4, -2], [-2, 2]]</td></tr>
+<tr><td>M</td><td>[[1, 0], [0, 1]]</td></tr>
+<tr><td>&lambda;1, &lambda;2</td><td>0.764, 5.236</td></tr>
+<tr><td>f1, f2</td><td>0.139 Hz, 0.364 Hz</td></tr>
+<tr><td>Mode shapes</td><td>Mode 1 &asymp; [0.618, 1], Mode 2 &asymp; [-1, 0.618] (sign or scale may differ)</td></tr>
+</table></div>
+<p id="testResult" class="big"></p>
+</section>
+
+<footer>Educational demonstration only &mdash; not for real building design or structural safety decisions.</footer>
+</main>
+
+<script>
+var state = {modes: null, sel: 0, playing: false, t0: 0};
+function $(id){ return document.getElementById(id); }
+function fmt(x){ return (Math.abs(x) < 1e-12 ? 0 : x).toFixed(3); }
+
+function matHTML(a){
+  return "<tr><td>" + fmt(a[0][0]) + "</td><td>" + fmt(a[0][1]) + "</td></tr>" +
+         "<tr><td>" + fmt(a[1][0]) + "</td><td>" + fmt(a[1][1]) + "</td></tr>";
+}
+
+// Eigen-solver for a 2x2 matrix [[a,b],[c,d]] with real eigenvalues
+function eigen2(a, b, c, d){
+  var tr = a + d, det = a*d - b*c;
+  var disc = tr*tr/4 - det;
+  if (disc < 0) disc = 0;
+  var s = Math.sqrt(disc);
+  var lams = [tr/2 - s, tr/2 + s];
+  return lams.map(function(l){
+    // two possible vectors from the two rows; pick the one that is not near zero
+    var v1 = [b, l - a], v2 = [l - d, c];
+    var n1 = Math.hypot(v1[0], v1[1]), n2 = Math.hypot(v2[0], v2[1]);
+    var v = n1 >= n2 ? v1 : v2;
+    if (Math.max(n1, n2) < 1e-12) v = [1, 0];
+    var m = Math.max(Math.abs(v[0]), Math.abs(v[1]));
+    v = [v[0]/m, v[1]/m];
+    // sign choice: top floor (floor 2) positive
+    if (v[1] < 0 || (v[1] === 0 && v[0] < 0)) v = [-v[0], -v[1]];
+    return {lambda: l, omega: Math.sqrt(l), f: Math.sqrt(l)/(2*Math.PI), vec: v};
+  });
+}
+
+function calculate(){
+  $("err").textContent = "";
+  var m1 = parseFloat($("m1").value), m2 = parseFloat($("m2").value);
+  var k1 = parseFloat($("k1").value), k2 = parseFloat($("k2").value);
+  var vals = [m1, m2, k1, k2];
+  for (var i = 0; i < vals.length; i++){
+    if (!isFinite(vals[i]) || vals[i] <= 0){
+      $("err").textContent = "Please enter positive numbers in all four boxes (mass and stiffness must be greater than 0).";
+      return false;
+    }
+  }
+  var M = [[m1, 0], [0, m2]];
+  var K = [[k1 + k2, -k2], [-k2, k2]];
+  var A = [[K[0][0]/m1, K[0][1]/m1], [K[1][0]/m2, K[1][1]/m2]];
+  $("Mm").innerHTML = matHTML(M);
+  $("Km").innerHTML = matHTML(K);
+  $("Am").innerHTML = matHTML(A);
+  var modes = eigen2(A[0][0], A[0][1], A[1][0], A[1][1]);
+  state.modes = modes;
+  var h = "<tr><th>Mode</th><th>Eigenvalue &lambda;</th><th>&omega; (rad/s)</th><th>f (Hz)</th><th>Eigenvector (floor 1, floor 2)</th></tr>";
+  modes.forEach(function(m, i){
+    h += "<tr><td class='big'>" + (i+1) + "</td><td class='big'>" + fmt(m.lambda) + "</td><td class='big'>" + fmt(m.omega) +
+         "</td><td class='big'>" + fmt(m.f) + "</td><td class='big'>[" + fmt(m.vec[0]) + ", " + fmt(m.vec[1]) + "]</td></tr>";
+  });
+  $("resTable").innerHTML = h;
+  draw(0);
+  return true;
+}
+
+function setMode(i){
+  state.sel = i;
+  $("mode1").className = i === 0 ? "sel" : "off";
+  $("mode2").className = i === 1 ? "sel" : "off";
+  state.t0 = performance.now();
+  draw(0);
+}
+
+// phase: 0 = frame at maximum displacement; otherwise a time-based factor
+function draw(phaseOverride){
+  if (!state.modes) return;
+  var m = state.modes[state.sel];
+  var factor = (phaseOverride === 0 && !state.playing) ? 1 : phaseOverride;
+  $("modeInfo").textContent = "Mode " + (state.sel+1) + ": f = " + fmt(m.f) + " Hz, shape = [" + fmt(m.vec[0]) + ", " + fmt(m.vec[1]) + "]";
+  var s = 55, cx = 150, w = 100;
+  var d = [0, m.vec[0]*s*factor, m.vec[1]*s*factor];
+  var ys = [230, 160, 90];
+  var out = "<rect x='60' y='230' width='180' height='12' fill='#7a8499'/>";
+  out += "<text x='150' y='256' text-anchor='middle' font-size='11' fill='currentColor'>ground</text>";
+  for (var i = 1; i <= 2; i++){
+    var x0 = cx - w/2 + d[i], xp = cx - w/2 + d[i-1];
+    out += "<line x1='" + (xp) + "' y1='" + ys[i-1] + "' x2='" + x0 + "' y2='" + (ys[i]+14) + "' stroke='#e08a1e' stroke-width='4'/>";
+    out += "<line x1='" + (xp+w) + "' y1='" + ys[i-1] + "' x2='" + (x0+w) + "' y2='" + (ys[i]+14) + "' stroke='#e08a1e' stroke-width='4'/>";
+    out += "<rect x='" + x0 + "' y='" + ys[i] + "' width='" + w + "' height='14' fill='#2457d6'/>";
+    out += "<text x='" + (x0 + w/2) + "' y='" + (ys[i]+11) + "' text-anchor='middle' font-size='10' fill='#fff'>Floor " + i + "</text>";
+  }
+  $("bld").innerHTML = out;
+
+  // plot: x = displacement (-1.2 to 1.2), y = floor number (0 to 2)
+  var px = function(v){ return 150 + v*110; };
+  var py = function(f){ return 220 - f*85; };
+  var p = "<line x1='20' y1='220' x2='280' y2='220' stroke='currentColor' opacity='.5'/>";
+  p += "<line x1='150' y1='30' x2='150' y2='225' stroke='currentColor' opacity='.5' stroke-dasharray='4'/>";
+  p += "<text x='150' y='242' text-anchor='middle' font-size='11' fill='currentColor'>normalized displacement</text>";
+  p += "<text x='150' y='20' text-anchor='middle' font-size='11' fill='currentColor'>Mode " + (state.sel+1) + "</text>";
+  for (var f = 0; f <= 2; f++){
+    p += "<text x='8' y='" + (py(f)+4) + "' font-size='11' fill='currentColor'>" + f + "</text>";
+  }
+  var pts = [[0,0],[m.vec[0],1],[m.vec[1],2]];
+  p += "<polyline fill='none' stroke='#2457d6' stroke-width='3' points='" + pts.map(function(q){ return px(q[0]) + "," + py(q[1]); }).join(" ") + "'/>";
+  pts.forEach(function(q){
+    p += "<circle cx='" + px(q[0]) + "' cy='" + py(q[1]) + "' r='5' fill='#e08a1e'/>";
+    p += "<text x='" + (px(q[0]) + 8) + "' y='" + (py(q[1]) - 6) + "' font-size='11' fill='currentColor'>" + fmt(q[0]) + "</text>";
+  });
+  $("plot").innerHTML = p;
+}
+
+function tick(now){
+  if (!state.playing) return;
+  var base = state.modes[0].omega;
+  var m = state.modes[state.sel];
+  var period = 3 * base / m.omega; // seconds on screen; Mode 2 moves faster
+  var t = (now - state.t0) / 1000;
+  draw(Math.sin(2*Math.PI*t/period));
+  requestAnimationFrame(tick);
+}
+
+function togglePlay(){
+  state.playing = !state.playing;
+  $("play").textContent = state.playing ? "Pause Animation" : "Play Animation";
+  if (state.playing){ state.t0 = performance.now(); requestAnimationFrame(tick); }
+  else draw(0);
+}
+
+function runTest(){
+  $("m1").value = 1; $("m2").value = 1; $("k1").value = 2; $("k2").value = 2;
+  if (!calculate()) return;
+  var a = state.modes;
+  var ok = Math.abs(a[0].lambda - 0.764) < 0.001 && Math.abs(a[1].lambda - 5.236) < 0.001 &&
+           Math.abs(a[0].f - 0.139) < 0.001 && Math.abs(a[1].f - 0.364) < 0.001;
+  $("testResult").innerHTML = ok
+    ? "<span class='ok'>&#10004; Match: &lambda; = " + fmt(a[0].lambda) + ", " + fmt(a[1].lambda) + " and f = " + fmt(a[0].f) + ", " + fmt(a[1].f) + " Hz</span>"
+    : "<span class='bad'>Does not match the expected values.</span>";
+}
+
+$("calc").onclick = function(){ $("testResult").textContent = ""; calculate(); };
+$("test").onclick = runTest;
+$("mode1").onclick = function(){ setMode(0); };
+$("mode2").onclick = function(){ setMode(1); };
+$("play").onclick = togglePlay;
+calculate();
+</script>
+</body>
+</html>
